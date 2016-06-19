@@ -6,38 +6,24 @@ ndoc.pairs = function(tbl)
 	return pairs(proxiesToReals[tbl])
 end
 
-
-util.AddNetworkString('ndoc.t.ctor') -- table definition
-util.AddNetworkString('ndoc.t.dtor') -- table destructor
-
--- utility for managing auto incrementing id pools
-local _stringIdCounter = 0
-local stringToId = setmetatable({}, {
-		__index = function(self, key)
-			rawset(self, key, _stringIdCounter)
-			_stringIdCounter = _stringIdCounter + 1
-			return self[key]
-		end
-	})
-
 local _tableIdCounter = 0
 local idToTable = {}
-local tableToId = setmetatable({}, {
-		__index = function(self, key)
-			local _tableIdCounter = _tableIdCounter + 1
-			tableToId[key] = _tableIdCounter
-			idToTable[_tableIdCounter] = key
-			return _tableIdCounter
-		end
-	})
+local tableToId = {}
 local proxiesToReals = {}
+
+ndoc.getTableId = function(table)
+	return tableToId[table]
+end
 
 -- utility to create a new networked table instance with a unique id
 ndoc.createTable = function(copy)
 	local proxy = {}
 	local real = {}
 
-	local id = tableToId[proxy]
+	_tableIdCounter = _tableIdCounter + 1
+	local id = _tableIdCounter
+	idToTable[id] = proxy
+	tableToId[proxy] = id
 	proxiesToReals[proxy] = real
 
 	setmetatable(proxy, {
@@ -72,7 +58,6 @@ ndoc.destroyTable = function(id)
 	local deleteHelper = function(proxy)
 		-- get the id
 		local id = tableToId[proxy]
-		idsDestroyed[#idsDestroyed + 1] = id
 
 		-- recursive
 		for k,v in pairs(proxiesToReals[proxy]) do
