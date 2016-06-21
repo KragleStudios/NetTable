@@ -4,231 +4,205 @@ print "loading netdoc by thelastpenguin"
 
 ndoc = {}
 
+
 -- ----------------------------------------
--- SETUP RESTRICTIONS ON TYPES SUPPORTED
+-- INPUT RESTRICTIONS
 -- ----------------------------------------
-ndoc._legal_key_types = {
+ndoc._allowedKeyTypes = {
+	['table'] = false,
 	['string'] = true,
 	['Entity'] = true,
 	['Player'] = true,
 	['Vehicle'] = true,
-	['number'] = true,
-	['boolean'] = true
+	['boolean'] = true,
+	['number'] = true
 }
 
-ndoc._leagl_value_types = {
-	['string'] = true,
+ndoc._allowedValueTypes = {
 	['table'] = true,
+	['string'] = true,
 	['Entity'] = true,
 	['Player'] = true,
 	['Vehicle'] = true,
-	['number'] = true,
-	['boolean'] = true
+	['boolean'] = true,
+	['number'] = true
 }
 
 -- ----------------------------------------
--- NETWORK UTILITIES
+-- INPUT RESTRICTIONS
 -- ----------------------------------------
-local net_Start, net_Send = net.Start, net.Send
-local player_GetAll = player.GetAll
-local net_WriteUInt, net_ReadUInt = net.WriteUInt, net.ReadUInt 
-local net_WriteInt, net_ReadInt = net.WriteInt, net.ReadInt 
-local net_WriteString, net_ReadString = net.WriteString, net.ReadString
-local net_WriteFloat, net_ReadFloat = net.WriteFloat, net.ReadFloat
-local math_floor = math.floor
-local Entity = Entity
+include 'net_utils_sh.lua'
 
-local all_players = player.GetAll()
-hook.Add('PlayerInitialSpawn', 'ndoc.update_all_players', function()
-	all_players = player.GetAll()
-end)
-ndoc.getAllPlayers = function()
-	return all_players 
-end
+-- localizations post includes
+local net_Start, net_Send = net.Start, net.Send 
+local net_readKey, net_writeKey = ndoc.net_readKey, ndoc.net_writeKey
+local net_readValue, net_writeValue = ndoc.net_readValue, ndoc.net_writeValue
 
-
---
--- NETWORKED STRINGS
---
-local _stringToId = {}
-local _idToString = {}
-local _stringTableSize = 0
+-- ----------------------------------------
+-- NDOC REAL
+-- ----------------------------------------
+local _proxyToId
+local _idToProxy
 
 if SERVER then
-	util.AddNetworkString('ndoc.st.addNetString')
-	util.AddNetworkString('ndoc.st.syncNetStrings')
+	local _allowedKeyTypes = ndoc._allowedKeyTypes
+	local _allowedValueTypes = ndoc._allowedValueTypes
 
-	ndoc.addNetString = function(string)
-		_stringTableSize = _stringTableSize + 1 
-		_idToString[_stringTableSize] = string
-		_stringToId[string] = _stringTableSize
-		net_Start('ndoc.st.addNetString')
-			net_WriteUInt(_stringTableSize, 16)
-			net_WriteString(string)
-		net_Send(all_players)
+	util.AddNetworkString('ndoc.t.setKV')
+	util.AddNetworkString('ndoc.t.sync')
+
+	-- the server component of netdoc 
+	local _tableUidNext = 0
+	_idToProxy = setmetatable({}, {_mode = 'v'})
+	_proxyToId = setmetatable({}, {_mode = 'k'})
+	local _proxyToReal = setmetatable({}, {_mode = 'k'})
+	local _originalToProxy = setmetatable({}, {_mode = 'v'})
+
+
+	function ndoc.tableGetId(proxy)
+		return _proxyToId[proxy]
 	end
 
-	ndoc.stringToId = function(string)
-		return _stringToId[string]
-	end
-	ndoc.idToString = function(id)
-		return _idToString[id]
+	function ndoc.tableWithId(id)
+		return _idToProxy[id]
 	end
 
-	hook.Add('PlayerInitialSpawn', 'ndoc.syncNetStrings', function(pl)
-		ra.net.waitFor(pl, function()
-			net_Start('ndoc.st.syncNetStrings')
-			net_WriteUInt(_stringTableSize, 16)
-			for i = 1, _stringTableSize do
-				net_WriteString(_idToString[i])
-			end
-			net_Send(pl)
-		end)
-	end
+	function ndoc.createTable(parent)
+		if _originalToProxy[parent] then
+			print "returning mapping!"
+			local old = _originalToProxy[parent]
 
-else
+			for k, v in pairs(parent) do
+				if v ~= parent and v ~= old[k] then
+					old[k] = v
+				end
+			end					
 
-	net.Receive('ndoc.st.syncNetStrings', function()
-		_stringTableSize = net_ReadUInt(16)
-		for i = 1, _stringTableSize do
-			local str = net_ReadString()
-			_idToString[i] = str 
-			_stringToId[str] = i
+			return _proxyToId[old]
 		end
+
+		local real = {}
+		local proxy = {} 
+		local tid = _tableUidNext
+		_tableUidNext = _tableUidNext + 1
+
+		_idToProxy[tid] = proxy
+		_proxyToId[proxy] = tid
+		_proxyToReal[proxy] = real 
+
+		setmetatable(proxy, {
+				__index = real,
+				__newindex = function(self, k, v)
+					local tk, tv = type(k), type(v)
+					if not _allowedKeyTypes[tk] then error("[ndoc] key type " .. tk .. " not supported by ndoc.") end 
+					if not _allowedValueTypes[tv] then error("[ndoc] value type " .. tv .. " not supported by ndoc.") end
+
+					print(tostring(tid) .. ' : ' .. tostring(k) .. ' = ' .. tostring(v))
+
+					if tv == 'table' then
+						print("setting table as value: " .. tostring(v))
+						v = _idToProxy[ndoc.createTable(v)]
+					end
+
+					net_Start 'ndoc.t.setKV'
+					net_WriteUInt(tid, 12)
+					net_writeKey(k)
+					net_writeValue(v)
+					net_Send(all_players)
+
+					real[k] = v
+
+				end
+			})
+
+		if parent then
+			print("original to proxy: " .. tostring(parent))
+			_originalToProxy[parent] = proxy
+
+			-- TODO: add optimization for onboarding arrays
+			for k,v in pairs(parent) do
+				proxy[k] = v
+			end
+		end
+
+		return tid
+	end
+
+	ndoc.bigtable = ndoc.tableWithId(ndoc.createTable()) -- table with id: 0
+else 
+	-- CLIENT
+	_idToProxy = setmetatable({}, {_mode = 'v'})
+	_proxyToId = setmetatable({}, {_mode = 'k'})
+	local _proxyToReal = setmetatable({}, {_mode = 'k'})
+
+	function ndoc.tableWithId(id)
+		local proxy = _idToProxy[id]
+		if proxy then return proxy end
+		
+		local real = {}
+		proxy = {}
+		setmetatable(proxy, {
+				__index = real,
+				__newindex = function()
+					error 'attempt to assign in client copy of table - not yet supported'
+				end
+			})
+
+		_proxyToReal[proxy] = real
+		_idToProxy[id] = proxy
+		_proxyToId[proxy] = id
+
+		return proxy
+	end
+	local _tableWithId = ndoc.tableWithId
+
+	net.Receive('ndoc.t.setKV', function()
+		local tid = net_ReadUInt(12)
+		local k = net_readKey()
+		local v = net_readValue()
+		print(tostring(tid) .. ' : ' .. tostring(k) .. ' = ' .. tostring(v))
+		_proxyToReal[_tableWithId(tid)][k] = v
 	end)
 
+	ndoc.bigtable = ndoc.tableWithId(0) -- table from id: 0
 end
 
-local type         = type 
-local TYPE_NIL     = 0
-local TYPE_STRING  = 1
-local TYPE_ENTITY  = 2
-local TYPE_NUMBER  = 3
-local TYPE_FLOAT   = 4
-local TYPE_BOOLEAN_TRUE = 5
-local TYPE_BOOLEAN_FALSE = 6
-local TYPE_TABLE   = 7
+-- ----------------------------------------
+-- NDOC ON BOARDING
+-- ----------------------------------------
+if CLIENT then
+	timer.Create('ndoc.waitForSelf', 1, 0, function()
+		if not IsValid(LocalPlayer()) then return end
+		timer.Destroy('ndoc.waitForSelf')
 
--- data encoders
-local key_encoders = {}
-local key_decoders = {}
-local value_encoders = {}
-local value_decoders = {}
+		-- request the string table sync
+		net_Start 'ndoc.st.cl.requestSync'
+		net.SendToServer()
 
--- key encoder: string
+		net.Receive('ndoc.st.syncNetStrings', function()
+			ndoc._receiveStringTable()
+
+			-- now that the string table has sync'd request that the entire table should sync
+			net.Start 'ndoc.t.cl.requestSync'
+			
+			net.SendToServer()
+		end)
+	end)
+
+
+
+-- general strategy
+--[[
+ - whenever a table gets added you create a table as a proxy for it
+ - if the same table gets added twice the same proxy is used and possibly updated (todo add updating for the proxy and propper diffing)
+ - batch sync keys and values when onboarding 
+]]
+
 if SERVER then
-	local _nextStringIndex = 0 -- up to 2^12
-	local _stringTable = {}
-	local _playerStringtables = {}
-	key_encoders['string'] = function(value)
-		local stIndex = _stringTable[value]
-		if _stringToId[value] == nil then
-			ndoc.addNetString(value)
-		end
-		net_WriteUInt(TYPE_STRING, 4)
-		net_WriteUInt(_stringToId[value], 12)
-	end
-	key_decoders[TYPE_STRING] = function()
-		return net_ReadString()
-	end
-else
-	key_decoders[TYPE_STRING] = function()
-		return _idToString[net_ReadUInt(12)]
-	end
-	key_encoders['string'] = function(value)
-		net_WriteUInt(TYPE_STRING, 4)
-		net_WriteString(_stringToId[value], 12)
-	end
+
+	local datastructure = {}
+	datastructure[1] = datastructure
+	datastructure[2] = "hello world"
+	ndoc.bigtable.test = datastructure
+
 end
-
-value_encoders['string'] = function(value)
-	net_WriteUInt(TYPE_STRING, 4)
-	net_WriteString(value)
-end 
-value_decoders[TYPE_STRING] = function()
-	return net_ReadSTring()
-end
-
--- key encoder: number
-key_encoders['number'] = function(value)
-	if math_floor(value) == value and (value < 8388608 and value > -8388608) --[[ 2 ^ (24 - 1) ]] then
-		net_WriteUInt(TYPE_NUMBER, 4)
-		net_WriteInt(value, 24)
-	else
-		net_WriteUInt(TYPE_FLOAT, 4)
-		net_WriteFloat(value)
-	end
-end
-
-key_decoders[TYPE_FLOAT] = net_ReadFloat
-key_decoders[TYPE_NUMBER] = function()
-	return net_ReadUInt(24)
-end
-
--- key encoder: Entity
-key_encoders['Entity'] = function(value)
-	net_WriteUInt(TYPE_ENTITY, 4)
-	net_WriteUInt(value:EntIndex(), 12)
-end
-key_decoders[TYPE_ENTITY] = function()
-	return Entity(net_ReadUInt(12))
-end
-key_encoders['Player'] = key_encoders['Entity']
-
--- key encoder: boolean
-key_encoders['boolean'] = function(value)
-	if value then
-		net_WriteUInt(TYPE_BOOLEAN_TRUE, 4)
-	else
-		net_WriteUInt(TYPE_BOOLEAN_FALSE, 4)
-	end 
-end 
-key_decoders[TYPE_BOOLEAN_TRUE] = function() return true end
-key_decoders[TYPE_BOOLEAN_FALSE] = function() return false end 
-
--- value encoder: table
-if SERVER then
-	value_encoders['table'] = function(table)
-
-		-- WRITE CODE TO NETWORK A TABLE EFFICIENTLY!
-		net_WriteUInt(TYPE_TABLE, 4)
-		for k,v in pairs(table) do
-
-		end
-	end
-	value_decoders[TYPE_TABLE] = function(table)
-		net.ReadTable() -- not designed to be fast at all... please never use this
-else
-	value_encoders['table'] = function(table)
-		net.WriteTable(values)
-	end
-	value_decoder['table'] = function()
-		-- not going to be fun
-	end
-end
-
-for k,v in pairs(key_encoders) do 
-	if not value_encoders[k] then
-		value_encoders[k] = key_encoders[k]
-	end 
-end
-
-
---
--- NET READ AND WRITE UTILS
---
-ndoc.writeKey = function(key)
-	key_encoders[type(key)](key)
-end
-ndoc.writeValue = function(value)
-	value_encoders[type(value)](value)
-end
-
-ndoc.readKey = function(key, value)
-	return key_decoders[net_ReadUInt(4)]()
-end
-
-ndoc.readValue = function(key, value)
-	return value_decoders[net_ReadUInt(4)]()
-end
-
