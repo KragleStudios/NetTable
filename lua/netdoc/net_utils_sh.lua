@@ -1,3 +1,5 @@
+if SERVER then AddCSLuaFile() end
+
 -- ----------------------------------------
 -- NETWORK UTILITIES
 -- ----------------------------------------
@@ -14,6 +16,7 @@ local Entity = Entity
 
 -- table of all players
 local all_players = player.GetAll()
+ndoc.all_players = all_players
 local function _updateAllPlayers()
 	all_players = player.GetAll()
 	ndoc.all_players = all_players
@@ -30,7 +33,7 @@ local _idToString = {}
 local _stringTableSize = 0
 
 if SERVER then
-	util.AddNEtworkString('ndoc.st.cl.requestSync')
+	util.AddNetworkString('ndoc.st.cl.requestSync')
 	util.AddNetworkString('ndoc.st.addNetString')
 	util.AddNetworkString('ndoc.st.syncNetStrings')
 
@@ -43,6 +46,8 @@ if SERVER then
 			net_WriteUInt(_stringTableSize, 12)
 			net_WriteString(string)
 		net_Send(all_players)
+
+		return _stringTableSize
 	end
 
 	ndoc.stringToId = function(string)
@@ -62,7 +67,7 @@ if SERVER then
 		net_Send(pl)
 	end
 
-	net.Receive('ndoc.st.cl.requestSync', function(pl)
+	net.Receive('ndoc.st.cl.requestSync', function(_, pl)
 		ndoc._syncStringTableWithPlayer(pl)
 	end)
 
@@ -73,15 +78,35 @@ else
 		_stringToId[string] = id
 		_idToString[id] = string 
 		_stringTableSize = math.max(_stringTableSize, id)
+		ndoc.print("network string: " .. tostring(id) .. " -> " .. string)
 	end)
 
-	ndoc._receiveStringTable = function()
-		for i = 1, net_ReadUInt(12) do
-			local str = net_ReadString()
-			_idToString[i] = str 
-			_stringToId[str] = i
-		end
-	end
+
+	timer.Create('ndoc.waitForSelf', 1, 0, function()
+		if not IsValid(LocalPlayer()) then return end
+		ndoc.print("requesting string table sync")
+		timer.Destroy('ndoc.waitForSelf')
+
+		-- request the string table sync
+		net_Start 'ndoc.st.cl.requestSync'
+		net.SendToServer()
+
+		net.Receive('ndoc.st.syncNetStrings', function()
+			-- read string table
+			ndoc.print("sync'd string table...")
+			for i = 1, net_ReadUInt(12) do
+				local str = net_ReadString()
+				_idToString[i] = str 
+				_stringToId[str] = i
+				ndoc.print("\t" .. str)
+			end
+
+			ndoc.print("sync'd stringtable: " .. tostring(#_idToString))
+
+			-- allow hooking
+			hook.Call('ndoc.ReadyForOnboarding')
+		end)
+	end)
 end
 
 -- networking enums
@@ -129,10 +154,10 @@ if SERVER then
 	key_encoders['string'] = function(value)
 		local stIndex = _stringTable[value]
 		if _stringToId[value] == nil then
-			ndoc.addNetString(value)
+			stIndex = ndoc.addNetString(value)
 		end
 		net_WriteUInt(TYPE_STRING, 4)
-		net_WriteUInt(_stringToId[value], 12)
+		net_WriteUInt(stIndex, 12)
 	end
 	key_decoders[TYPE_STRING] = function()
 		return net_ReadString()
@@ -203,7 +228,7 @@ if SERVER then
 
 		-- WRITE CODE TO NETWORK A TABLE EFFICIENTLY!
 		net_WriteUInt(TYPE_TABLE, 4)
-		net_WriteUInt(ndoc.tableGetId[table], 12)
+		net_WriteUInt(ndoc.tableGetId(table), 12)
 	end
 	value_decoders[TYPE_TABLE] = function(table)
 		return net.ReadTable() -- not designed to be fast at all... please never use this

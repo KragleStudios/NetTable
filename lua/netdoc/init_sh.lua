@@ -1,9 +1,19 @@
-require 'ra'
+if SERVER then AddCSLuaFile() end
 
-print "loading netdoc by thelastpenguin"
+require 'ra'
 
 ndoc = {}
 
+
+-- ----------------------------------------
+-- LOGGING
+-- ----------------------------------------
+ndoc.print = function(...)
+	MsgC(Color(255, 255, 255), '[nDoc] ')
+	print(...)
+end
+
+ndoc.print("loading ndoc by thelastpenguin")
 
 -- ----------------------------------------
 -- INPUT RESTRICTIONS
@@ -35,29 +45,36 @@ include 'net_utils_sh.lua'
 
 -- localizations post includes
 local net_Start, net_Send = net.Start, net.Send 
+local net_BytesWritten = net.BytesWritten
+local net_WriteUInt, net_ReadUInt = net.WriteUInt, net.ReadUInt
 local net_readKey, net_writeKey = ndoc.net_readKey, ndoc.net_writeKey
 local net_readValue, net_writeValue = ndoc.net_readValue, ndoc.net_writeValue
 
 -- ----------------------------------------
 -- NDOC REAL
 -- ----------------------------------------
-local _proxyToId
-local _idToProxy
-
 if SERVER then
 	local _allowedKeyTypes = ndoc._allowedKeyTypes
 	local _allowedValueTypes = ndoc._allowedValueTypes
 
 	util.AddNetworkString('ndoc.t.setKV')
 	util.AddNetworkString('ndoc.t.sync')
+	util.AddNetworkString('ndoc.t.cl.requestSync')
 
 	-- the server component of netdoc 
 	local _tableUidNext = 0
-	_idToProxy = setmetatable({}, {_mode = 'v'})
-	_proxyToId = setmetatable({}, {_mode = 'k'})
+	local _idToProxy = setmetatable({}, {_mode = 'v'})
+	local _proxyToId = setmetatable({}, {_mode = 'k'})
 	local _proxyToReal = setmetatable({}, {_mode = 'k'})
 	local _originalToProxy = setmetatable({}, {_mode = 'v'})
 
+	function ndoc.ipairs(proxy)
+		return ipairs(_proxyToReal[proxy])
+	end
+
+	function ndoc.pairs(proxy)
+		return pairs(_proxyToReal[proxy])
+	end
 
 	function ndoc.tableGetId(proxy)
 		return _proxyToId[proxy]
@@ -69,7 +86,6 @@ if SERVER then
 
 	function ndoc.createTable(parent)
 		if _originalToProxy[parent] then
-			print "returning mapping!"
 			local old = _originalToProxy[parent]
 
 			for k, v in pairs(parent) do
@@ -78,7 +94,7 @@ if SERVER then
 				end
 			end					
 
-			return _proxyToId[old]
+			return old
 		end
 
 		local real = {}
@@ -97,18 +113,18 @@ if SERVER then
 					if not _allowedKeyTypes[tk] then error("[ndoc] key type " .. tk .. " not supported by ndoc.") end 
 					if not _allowedValueTypes[tv] then error("[ndoc] value type " .. tv .. " not supported by ndoc.") end
 
-					print(tostring(tid) .. ' : ' .. tostring(k) .. ' = ' .. tostring(v))
+					ndoc.print(tostring(tid) .. ' : ' .. tostring(k) .. ' = ' .. tostring(v))
 
 					if tv == 'table' then
-						print("setting table as value: " .. tostring(v))
-						v = _idToProxy[ndoc.createTable(v)]
+						ndoc.print("setting table as value: " .. tostring(v))
+						v = ndoc.createTable(v)
 					end
 
 					net_Start 'ndoc.t.setKV'
 					net_WriteUInt(tid, 12)
 					net_writeKey(k)
 					net_writeValue(v)
-					net_Send(all_players)
+					net_Send(ndoc.all_players)
 
 					real[k] = v
 
@@ -116,7 +132,7 @@ if SERVER then
 			})
 
 		if parent then
-			print("original to proxy: " .. tostring(parent))
+			ndoc.print("original to proxy: " .. tostring(parent))
 			_originalToProxy[parent] = proxy
 
 			-- TODO: add optimization for onboarding arrays
@@ -125,10 +141,33 @@ if SERVER then
 			end
 		end
 
-		return tid
+		return proxy
 	end
 
-	ndoc.bigtable = ndoc.tableWithId(ndoc.createTable()) -- table with id: 0
+	ndoc._syncTable = function(proxy, pl)
+		local tid = _proxyToId[proxy]
+		net_Start 'ndoc.t.sync'
+		net_WriteUInt(tid, 12)
+		for k, v in ndoc.pairs(proxy) do
+			if net_BytesWritten() > 32768 then
+				net_WriteUInt(0, 4) -- TYPE_NIL
+				net_Send(pl or net.all_players)
+				
+				net_Start 'ndoc.t.sync'
+				net_WriteUInt(tid, 12)
+			end
+		end
+		net_WriteUInt(0, 4)
+		net_Send(pl or net.all_players)
+	end
+
+	net.Receive('ndoc.t.cl.requestSync', function(pl)
+		for k,v in pairs(_idToProxy) do
+			ndoc._syncTable(v, pl)
+		end
+	end)
+
+	ndoc.bigtable = ndoc.createTable() -- table with id: 0
 else 
 	-- CLIENT
 	_idToProxy = setmetatable({}, {_mode = 'v'})
@@ -160,8 +199,22 @@ else
 		local tid = net_ReadUInt(12)
 		local k = net_readKey()
 		local v = net_readValue()
-		print(tostring(tid) .. ' : ' .. tostring(k) .. ' = ' .. tostring(v))
+
+		ndoc.print(tostring(tid) .. ' : ' .. tostring(k) .. ' = ' .. tostring(v))
+
 		_proxyToReal[_tableWithId(tid)][k] = v
+	end)
+
+	net.Receive('ndoc.t.sync', function()
+		local tid = net_ReadUInt(12)
+		local t = ndoc.tableWithId(tid)
+		local real = _proxyToReal[t] 
+
+		for i = 1, kvPairCount do 
+			local k, v = net_readKey(), net_readValue()
+			if k == nil then break end
+			real[k] = v
+		end
 	end)
 
 	ndoc.bigtable = ndoc.tableWithId(0) -- table from id: 0
@@ -171,32 +224,13 @@ end
 -- NDOC ON BOARDING
 -- ----------------------------------------
 if CLIENT then
-	timer.Create('ndoc.waitForSelf', 1, 0, function()
-		if not IsValid(LocalPlayer()) then return end
-		timer.Destroy('ndoc.waitForSelf')
+	hook.Add('ndoc.ReadyForOnboarding', 'ndoc.onboard', function()
 
-		-- request the string table sync
-		net_Start 'ndoc.st.cl.requestSync'
-		net.SendToServer()
+		net.Start 'ndoc.t.cl.requestSync'
 
-		net.Receive('ndoc.st.syncNetStrings', function()
-			ndoc._receiveStringTable()
-
-			-- now that the string table has sync'd request that the entire table should sync
-			net.Start 'ndoc.t.cl.requestSync'
-			
-			net.SendToServer()
-		end)
 	end)
+end
 
-
-
--- general strategy
---[[
- - whenever a table gets added you create a table as a proxy for it
- - if the same table gets added twice the same proxy is used and possibly updated (todo add updating for the proxy and propper diffing)
- - batch sync keys and values when onboarding 
-]]
 
 if SERVER then
 
