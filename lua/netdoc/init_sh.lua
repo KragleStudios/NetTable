@@ -4,6 +4,7 @@ require 'ra'
 
 ndoc = {}
 
+ndoc.debugMode = true
 ndoc.maxChecksumRetries = 5 -- don't accidentally delete this line
 
 -- ----------------------------------------
@@ -12,6 +13,28 @@ ndoc.maxChecksumRetries = 5 -- don't accidentally delete this line
 ndoc.print = function(...)
 	MsgC(Color(255, 255, 255), '[nDoc] ')
 	print(...)
+end
+
+if ndoc.debugMode then
+	if SERVER then
+		function ndoc.error(...)
+			local message = os.date("%d/%m/%Y - %H:%M:%S", os.time()) .. '\tERROR: ' .. table.concat({...}, ' ') .. '\n'
+			file.Append('ndoc-errors.txt', message)
+		end
+
+		util.AddNetworkString('ndoc.error')
+		net.Receive('ndoc.error', function(_, pl)
+			ndoc.error(pl:Name() .. '(' .. (pl:SteamID() or 'local_player') .. ')', net.ReadString())
+		end)
+	else
+		function ndoc.error(...)
+			net.Start('ndoc.error')
+			net.WriteString(table.concat({...}, ' '))
+			net.SendToServer()
+		end
+	end
+else
+	function ndoc.error() end
 end
 
 ndoc.print("loading ndoc by thelastpenguin")
@@ -43,10 +66,10 @@ ndoc._allowedValueTypes = {
 -- INPUT RESTRICTIONS
 -- ----------------------------------------
 include 'net_utils_sh.lua'
+include 'net_async_sh.lua'
 include 'net_flex_sh.lua'
 include 'net_stringtable_sh.lua'
 include 'net_synctable_sh.lua'
-include 'net_async_sh.lua'
 
 -- localizations post includes
 local net_Start, net_Send = net.Start, net.Send 

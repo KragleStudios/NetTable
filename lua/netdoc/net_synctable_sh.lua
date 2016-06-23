@@ -67,8 +67,6 @@ if SERVER then
 					if not _allowedKeyTypes[tk] then error("[ndoc] key type " .. tk .. " not supported by ndoc.") end 
 					if not _allowedValueTypes[tv] then error("[ndoc] value type " .. tv .. " not supported by ndoc.") end
 
-					-- ndoc.print(tostring(tid) .. ' : ' .. tostring(k) .. ' = ' .. tostring(v))
-
 					if tv == 'table' then
 						-- ndoc.print("setting table as value: " .. tostring(v))
 						if type(real[k]) == 'table' then
@@ -94,6 +92,8 @@ if SERVER then
 							ndoc.addNetString(k)
 						end
 					end
+
+					ndoc.print(tostring(tid) .. ' : ' .. tostring(k) .. ' = ' .. tostring(v))
 
 					net_Start 'ndoc.t.setKV'
 					net_WriteUInt(tid, 12)
@@ -121,11 +121,19 @@ if SERVER then
 		local bytes = 0
 		local tid = _proxyToId[proxy]
 		if not tid then
+			ndoc.error("syncing tables for "..pl:SteamID().." tried to sync an invalid tableid.")
 			return 0
 		end
 
 		net_Start 'ndoc.t.sync'
 		net_WriteUInt(tid, 12)
+
+		local real = _proxyToReal[proxy]
+		if not real then 
+			ndoc.error("syncing tables for "..pl:SteamID().." no real entry for " .. tostring(proxy) .. " proxy")
+			return 
+		end -- we don't want to kill the entire onboard just because of this
+
 		for k, v in ndoc.pairs(proxy) do
 			if net_BytesWritten() > 32768 then
 				net_WriteUInt(0, 4) -- TYPE_NIL
@@ -198,9 +206,13 @@ elseif CLIENT then
 		local k = net_readKey()
 		local v = net_readValue()
 
-		-- ndoc.print(tostring(tid) .. ' : ' .. tostring(k) .. ' = ' .. tostring(v))
-
-		_proxyToReal[_tableWithId(tid)][k] = v
+		--ndoc.print(tostring(tid) .. ' : ' .. tostring(k) .. ' = ' .. tostring(v))
+		local real = _proxyToReal[_tableWithId(tid)]
+		if not real then
+			ndoc.error("failed to get 'real' for table " .. tid .. " during sync.")
+			return 
+		end
+		real[k] = v
 	end)
 
 	net.Receive('ndoc.t.sync', function()
@@ -219,8 +231,6 @@ elseif CLIENT then
 	end)
 
 	ndoc.loadBigtable = function()
-		table.Empty(_idToProxy)
-		table.Empty(_proxyToId)
 		ndoc.print("syncing net document")
 		net.Start 'ndoc.t.cl.requestFullSync'
 		net.SendToServer()
@@ -229,3 +239,5 @@ elseif CLIENT then
 	ndoc.bigtable = ndoc.getTableById(0) -- table from id: 0
 
 end
+
+-- TODO: optimize onboarding arrays
