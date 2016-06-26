@@ -6,6 +6,8 @@ if SERVER then AddCSLuaFile() end
 include 'net_flex_sh.lua'
 include 'net_stringtable_sh.lua'
 
+local type = type 
+local select = select 
 local net_Start, net_Send = net.Start, net.Send 
 local net_BytesWritten = net.BytesWritten
 local net_WriteUInt, net_ReadUInt = net.WriteUInt, net.ReadUInt
@@ -16,6 +18,109 @@ local _allowedKeyTypes = ndoc._allowedKeyTypes
 local _allowedValueTypes = ndoc._allowedValueTypes
 
 local _stringToId = ndoc._stringToId
+
+--
+-- PATH HOOKING
+--
+local hooks = setmetatable({}, {__mode = 'k'})
+
+local stack_stores = {}
+local stack_store_empty = function() end
+local function store_stack(...)
+	local c = select('#', ...)
+	if c == 0 then return stack_store_empty end
+	if stack_stores[c] then return stack_stores[c](...) end
+
+	local vars = {} for i = 1, c do vars[i] = 'v'..i end
+	local vars_def = table.concat(vars, ', ')
+
+	-- read the code it's safe
+	RunString(string.format([[
+		_G.__STACK_STORE = function(...)
+			local %s = ...
+			return function(...)
+				return %s, ...
+			end
+		end
+	]], vars_def, vars_def))
+
+	stack_stores[c] = _G.__STACK_STORE
+	_G.__STACK_STORE = nil
+	return stack_stores[c]
+end
+ndoc.store_stack = store_stack
+
+
+function ndoc.compilePath(path)
+	local segments = string.Explode('.', path, false)
+	return store_stack(unpack(segments))
+end
+
+local isValidPath = function(table, a, ...)
+	if a == nil then return true end
+	return table[a] ~= nil and ifValidPath(table[a], ...)
+end
+ndoc.isValidPath = isValidPath
+
+local hooks = setmetatable({}, {__mode = 'k'})
+-- key: table value:
+--  	key: key-string value: hook-data
+local function addHook(tbl, type, fn, args, key, ...)
+	-- note that the memory used by this is mind blowing. dont over do these hook things.
+	if not hooks[tbl] then hooks[tbl] = {} end
+	if not hooks[tbl][key] then hooks[tbl][key] = {} end
+	table.insert(hooks[tbl][key], {
+			path = store_stack(...),
+			args = args,
+			type = type,
+			fn = fn
+		})
+
+	if key == '?' then
+		for k, v in ndoc.pairs(tbl) do
+			if type(v) == 'table' then
+				addHook(v, type, fn, store_stack(args(k)), ...)
+			end
+		end
+	end
+
+	local next = tbl[key]
+	if next and type(next) == 'table' then
+		addHook(next, type, fn, ...)
+	end
+end
+
+local function updateHookStruct(tbl, key, val)
+	if type(val) ~= 'table' then return end
+	if not hooks[tbl] or not hooks[tbl][key] then return end
+
+	for k, hook in ipairs(hooks[tbl][key]) do
+		addHook(val, hook.type, hook.fn, hook.args, hook.path()) -- check this line if theere are bugs. hook.path() might need to be select(2, hook.path())
+	end
+
+	-- future you!!! this is where you left off!!! if you dont remember	
+	for k, hook in pairs(hooks[tbl]['?']) do
+		addHook(val, hook.type, hook.fn, store_stack(hook.args(k)), store_hook.path()) -- check this line if theere are bugs. hook.path() might need to be select(2, hook.path())
+	end
+end
+
+local function callHooks(tbl, type, key, val)
+	if not hooks[tbl] or not hooks[tbl][key] then return end
+	for k, hook in ipairs(hooks[tbl][key]) do
+		hook()
+	end
+end
+
+function ndoc.addHook(key, type, fn)
+	local path = ndoc.compilePath(key)
+	addHook(ndoc.table, type, fn, store_stack(), path())
+
+	return path
+end
+
+--
+-- SYNCING TABLES
+-- 
 
 if SERVER then 
 	util.AddNetworkString('ndoc.t.setKV')
@@ -51,17 +156,26 @@ if SERVER then
 		return _idToProxy[id]
 	end
 
-	function ndoc.createTable(parent)
+	function ndoc.createTable(parent, key)
+		local path = store_stack(parent.__path(key))
+		local depth = select('#', parent.__path())
+
 		local real = {}
-		local proxy = {}
+		local proxy = {
+			__key = key,
+			__path = path,
+			__depth = depth, -- the node's depth in the tree
+			__hooks = {}
+		}
+
 		local tid = nextUid()
 		
 		_idToProxy[tid] = proxy
 		_proxyToId[proxy] = tid
-		_proxyToReal[proxy] = real 
+		_proxyToReal[proxy] = real
 
 		setmetatable(proxy, {
-				__index = function(self, k) return real[k] end,
+				__index = real,
 				__newindex = function(self, k, v)
 					local tk, tv = type(k), type(v)
 					if not _allowedKeyTypes[tk] then error("[ndoc] key type " .. tk .. " not supported by ndoc.") end 
@@ -84,7 +198,7 @@ if SERVER then
 							end
 							return 
 						end
-						v = ndoc.createTable(v)
+						v = ndoc.createTable(v, path)
 					end
 					if tk == 'string' then
 						-- make sure it's in the string table
@@ -102,13 +216,18 @@ if SERVER then
 					net_Send(ndoc.all_players)
 
 					real[k] = v
+
+					-- update the hook structure
+					updateHookStruct(self, k, v)
+					-- call hooks
+					callHooks(self, 'set', k, v)
 				end
 			})
 
 		if parent then
 			_originalToProxy[parent] = proxy
 
-			-- TODO: add optimization for onboarding arrays
+			-- TODO: add optimization for adding arrays
 			for k,v in pairs(parent) do
 				proxy[k] = v
 			end
@@ -171,13 +290,14 @@ if SERVER then
 		end)
 	end)
 
-	ndoc.bigtable = ndoc.createTable() -- table with id: 0
+	ndoc.table = ndoc.createTable() -- table with id: 0
+	hooks[ndoc.table] = {}
 
 elseif CLIENT then
 
 	-- CLIENT
-	_idToProxy = setmetatable({}, {_mode = 'v'})
-	_proxyToId = setmetatable({}, {_mode = 'k'})
+	local _idToProxy = setmetatable({}, {_mode = 'v'})
+	local _proxyToId = setmetatable({}, {_mode = 'k'})
 	local _proxyToReal = setmetatable({}, {_mode = 'k'})
 
 	function ndoc.getTableById(id)
@@ -200,6 +320,14 @@ elseif CLIENT then
 		return proxy
 	end
 	local _tableWithId = ndoc.getTableById
+
+	function ndoc.ipairs(tbl)
+		return ipairs(_proxyToReal[tbl])
+	end
+
+	function ndoc.pairs(tbl)
+		return pairs(_proxyToReal[tbl])
+	end
 
 	net.Receive('ndoc.t.setKV', function()
 		local tid = net_ReadUInt(12)
@@ -236,7 +364,8 @@ elseif CLIENT then
 		net.SendToServer()
 	end
 
-	ndoc.bigtable = ndoc.getTableById(0) -- table from id: 0
+	ndoc.table = ndoc.getTableById(0) -- table from id: 0
+
 
 end
 
