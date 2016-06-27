@@ -107,7 +107,8 @@ end
 local function callHooks(tbl, type, key, val)
 	if not hooks[tbl] or not hooks[tbl][key] then return end
 	for k, hook in ipairs(hooks[tbl][key]) do
-		hook()
+		local a = hook.fn(hook.args(val))
+		if a ~= nil then return a end
 	end
 end
 
