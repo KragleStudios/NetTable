@@ -92,11 +92,3 @@ if CLIENT then
 		ndoc._onboard()
 	end)
 end
-
-
-if SERVER then 
-	ndoc.table.test = 12
-	ndoc.table.helloWorld = {
-		heyo = 15
-	}
-end

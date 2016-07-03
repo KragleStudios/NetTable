@@ -13,6 +13,7 @@ local net_BytesWritten = net.BytesWritten
 local net_WriteUInt, net_ReadUInt = net.WriteUInt, net.ReadUInt
 local net_readKey, net_writeKey = ndoc.net_readKey, ndoc.net_writeKey
 local net_readValue, net_writeValue = ndoc.net_readValue, ndoc.net_writeValue
+local table = table 
 
 local _allowedKeyTypes = ndoc._allowedKeyTypes
 local _allowedValueTypes = ndoc._allowedValueTypes
@@ -82,9 +83,9 @@ local function addHook(tbl, hookType, fn, arguments, key, nextKey, ...)
 				path = store_stack(nextKey, ...)
 			})
 
-		for k,v in ndec.pairs(tbl) do
+		for k,v in ndoc.pairs(tbl) do
 			if type(v) == 'table' then
-				addHook(v, hookType, fn, store_stack(arguments(key)), nextKey, ...)
+				addHook(v, hookType, fn, store_stack(arguments(k)), nextKey, ...)
 			end
 		end
 	else
@@ -114,7 +115,7 @@ local function propogateExistingHooks(tbl, key, val)
 	if hooks[tbl]['?'] then
 		for k, hook in ipairs(hooks[tbl]['?']) do
 			if hook.intermediate then
-				addHook(tbl[key], hook.type, hook.fn, store_stack(hook.args(k)), hook.path())
+				addHook(tbl[key], hook.type, hook.fn, store_stack(hook.args(key)), hook.path())
 			end
 		end
 	end
@@ -134,7 +135,6 @@ local function callHook(tbl, type, key, val)
 	print("the hook table exists!")
 	
 	if hooks[tbl][key] then
-		print("there are " .. #hooks[tbl][key] .. " hooks on " .. tostring(key))
 		for k, hook in ipairs(hooks[tbl][key]) do
 			if hook.type == type and not hook.intermediate then
 				hook.fn(hook.args(val))
@@ -142,7 +142,7 @@ local function callHook(tbl, type, key, val)
 		end
 	end
 	if hooks[tbl]['?'] then
-		for k, hook in ipairs(hooks[tbl][key]) do
+		for k, hook in ipairs(hooks[tbl]['?']) do
 			if hook.type == type and not hook.intermediate then
 				hook.fn(hook.args(val))
 			end

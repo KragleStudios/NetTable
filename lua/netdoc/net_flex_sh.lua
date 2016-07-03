@@ -33,6 +33,8 @@ local TYPE_FLOAT   = 4
 local TYPE_BOOLEAN_TRUE = 5
 local TYPE_BOOLEAN_FALSE = 6
 local TYPE_TABLE   = 7
+local TYPE_VECTOR = 8
+local TYPE_ANGLE = 9
 
 -- data encoders
 local key_encoders = {}
@@ -153,6 +155,25 @@ else
 	value_decoders[TYPE_TABLE] = function()
 		return ndoc.getTableById(net_ReadUInt(12))
 	end
+end
+
+-- key encoder: vector
+key_encoders['Vector'] = function(vector)
+	net_WriteUInt(TYPE_VECTOR, 4)
+	net.WriteVector(vector)
+end
+
+key_decoders[TYPE_VECTOR] = function()
+	return ndoc.ReadVector()
+end
+
+key_encoders['Angle'] = function(angle)
+	net_WriteUInt(TYPE_ANGLE)
+	net.WriteAngle(angle)
+end
+
+key_decoders[TYPE_ANGLE] = function()
+	return net.ReadAngle()
 end
 
 for k,v in pairs(key_encoders) do 
