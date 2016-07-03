@@ -72,13 +72,8 @@ local function addHook(tbl, hookType, fn, arguments, key, nextKey, ...)
 
 	if key == '?' then
 		-- handle a wild card at this index in the table
-		for k,v in ndec.pairs(tbl) do
-			if type(v) == 'table' then
-				addHook(v, hookType, fn, store_stack(arguments(key)), nextKey, ...)
-			end
-		end
-
 		if not hooks[tbl]['?'] then hooks[tbl]['?'] = {} end
+
 		table.insert(hooks[tbl]['?'], {
 				intermediate = not (not nextKey),
 				fn = fn,
@@ -86,6 +81,12 @@ local function addHook(tbl, hookType, fn, arguments, key, nextKey, ...)
 				type = hookType,
 				path = store_stack(nextKey, ...)
 			})
+
+		for k,v in ndec.pairs(tbl) do
+			if type(v) == 'table' then
+				addHook(v, hookType, fn, store_stack(arguments(key)), nextKey, ...)
+			end
+		end
 	else
 		if not hooks[tbl][key] then hooks[tbl][key] = {} end
 		table.insert(hooks[tbl][key], {
@@ -99,21 +100,21 @@ local function addHook(tbl, hookType, fn, arguments, key, nextKey, ...)
 		if type(tbl[key]) == 'table' then -- finish going through and adding the hooks!
 			addHook(tbl[key], hookType, fn, arguments, nextKey, ...)
 		end
-
 	end
 end
+
 function ndoc.addHook(_path, type, fn)
 	local path = ndoc.compilePath(_path)
 	addHook(ndoc.table, type, fn, store_stack(), path())
 end
 
 local function propogateExistingHooks(tbl, key, val)
-	if not hooks[tbl] then return end
+	if not hooks[tbl] or type(val) ~= 'table' then return end
 
 	if hooks[tbl]['?'] then
 		for k, hook in ipairs(hooks[tbl]['?']) do
 			if hook.intermediate then
-				addHook(tbl, hook.type, hook.fn, store_stack(hook.args(k)), hook.path())
+				addHook(tbl[key], hook.type, hook.fn, store_stack(hook.args(k)), hook.path())
 			end
 		end
 	end
@@ -121,7 +122,7 @@ local function propogateExistingHooks(tbl, key, val)
 	if hooks[tbl][key] then
 		for k, hook in ipairs(hooks[tbl][key]) do
 			if hook.intermediate then
-				addHook(tbl, hook.type, hook.fn, hook.args, hook.path())
+				addHook(tbl[key], hook.type, hook.fn, hook.args, hook.path())
 			end
 		end
 	end
@@ -130,8 +131,10 @@ end
 
 local function callHook(tbl, type, key, val)
 	if not hooks[tbl] then return end
+	print("the hook table exists!")
 	
 	if hooks[tbl][key] then
+		print("there are " .. #hooks[tbl][key] .. " hooks on " .. tostring(key))
 		for k, hook in ipairs(hooks[tbl][key]) do
 			if hook.type == type and not hook.intermediate then
 				hook.fn(hook.args(val))
@@ -151,7 +154,7 @@ end
 function ndoc.printHooks(table)
 	for k,hooks in pairs(hooks) do
 		for key, hooks in pairs(hooks) do
-			for k, hooks in ipairs(hooks) do 
+			for k, hook in ipairs(hooks) do 
 				print("hook: "..tostring(hook.fn) .. " type: " .. hook.type)
 				print("\targs:" .. table.concat({hook.args()}, ', '))
 				print("\tpath:" .. table.concat({hook.args()}, ', '))
