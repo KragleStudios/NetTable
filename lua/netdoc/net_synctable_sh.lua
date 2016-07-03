@@ -25,10 +25,9 @@ local _stringToId = ndoc._stringToId
 local hooks = setmetatable({}, {__mode = 'k'})
 
 local stack_stores = {}
-local stack_store_empty = function() end
+stack_stores[0] = function() return function(...) return ... end end
 local function store_stack(...)
 	local c = select('#', ...)
-	if c == 0 then return stack_store_empty end
 	if stack_stores[c] then return stack_stores[c](...) end
 
 	local vars = {} for i = 1, c do vars[i] = 'v'..i end
@@ -46,7 +45,7 @@ local function store_stack(...)
 
 	stack_stores[c] = _G.__STACK_STORE
 	_G.__STACK_STORE = nil
-	return stack_stores[c]
+	return stack_stores[c](...)
 end
 ndoc.store_stack = store_stack
 
@@ -63,60 +62,104 @@ end
 ndoc.isValidPath = isValidPath
 
 local hooks = setmetatable({}, {__mode = 'k'})
--- key: table value:
---  	key: key-string value: hook-data
-local function addHook(tbl, type, fn, args, key, ...)
-	-- note that the memory used by this is mind blowing. dont over do these hook things.
+
+local function addHook(tbl, hookType, fn, arguments, key, nextKey, ...)
+	if not key then return end 
+
 	if not hooks[tbl] then hooks[tbl] = {} end
-	if not hooks[tbl][key] then hooks[tbl][key] = {} end
-	table.insert(hooks[tbl][key], {
-			path = store_stack(...),
-			args = args,
-			type = type,
-			fn = fn
-		})
+
+	print("adding hook to table " .. tostring(tbl) .. " on key " .. tostring(key) .. "!")
 
 	if key == '?' then
-		for k, v in ndoc.pairs(tbl) do
+		-- handle a wild card at this index in the table
+		for k,v in ndec.pairs(tbl) do
 			if type(v) == 'table' then
-				addHook(v, type, fn, store_stack(args(k)), ...)
+				addHook(v, hookType, fn, store_stack(arguments(key)), nextKey, ...)
+			end
+		end
+
+		if not hooks[tbl]['?'] then hooks[tbl]['?'] = {} end
+		table.insert(hooks[tbl]['?'], {
+				intermediate = not (not nextKey),
+				fn = fn,
+				args = arguments,
+				type = hookType,
+				path = store_stack(nextKey, ...)
+			})
+	else
+		if not hooks[tbl][key] then hooks[tbl][key] = {} end
+		table.insert(hooks[tbl][key], {
+				intermediate = not (not nextKey),
+				fn = fn,
+				args = arguments,
+				type = hookType,
+				path = store_stack(nextKey, ...)
+			})
+
+		if type(tbl[key]) == 'table' then -- finish going through and adding the hooks!
+			addHook(tbl[key], hookType, fn, arguments, nextKey, ...)
+		end
+
+	end
+end
+function ndoc.addHook(_path, type, fn)
+	local path = ndoc.compilePath(_path)
+	addHook(ndoc.table, type, fn, store_stack(), path())
+end
+
+local function propogateExistingHooks(tbl, key, val)
+	if not hooks[tbl] then return end
+
+	if hooks[tbl]['?'] then
+		for k, hook in ipairs(hooks[tbl]['?']) do
+			if hook.intermediate then
+				addHook(tbl, hook.type, hook.fn, store_stack(hook.args(k)), hook.path())
 			end
 		end
 	end
 
-	local next = tbl[key]
-	if next and type(next) == 'table' then
-		addHook(next, type, fn, ...)
+	if hooks[tbl][key] then
+		for k, hook in ipairs(hooks[tbl][key]) do
+			if hook.intermediate then
+				addHook(tbl, hook.type, hook.fn, hook.args, hook.path())
+			end
+		end
+	end
+
+end
+
+local function callHook(tbl, type, key, val)
+	if not hooks[tbl] then return end
+	
+	if hooks[tbl][key] then
+		for k, hook in ipairs(hooks[tbl][key]) do
+			if hook.type == type and not hook.intermediate then
+				hook.fn(hook.args(val))
+			end
+		end
+	end
+	if hooks[tbl]['?'] then
+		for k, hook in ipairs(hooks[tbl][key]) do
+			if hook.type == type and not hook.intermediate then
+				hook.fn(hook.args(val))
+			end
+		end
 	end
 end
 
-local function updateHookStruct(tbl, key, val)
-	if type(val) ~= 'table' then return end
-	if not hooks[tbl] or not hooks[tbl][key] then return end
 
-	for k, hook in ipairs(hooks[tbl][key]) do
-		addHook(val, hook.type, hook.fn, hook.args, hook.path()) -- check this line if theere are bugs. hook.path() might need to be select(2, hook.path())
-	end
-
-	-- future you!!! this is where you left off!!! if you dont remember	
-	for k, hook in pairs(hooks[tbl]['?']) do
-		addHook(val, hook.type, hook.fn, store_stack(hook.args(k)), store_hook.path()) -- check this line if theere are bugs. hook.path() might need to be select(2, hook.path())
-	end
-end
-
-local function callHooks(tbl, type, key, val)
-	if not hooks[tbl] or not hooks[tbl][key] then return end
-	for k, hook in ipairs(hooks[tbl][key]) do
-		hook()
+function ndoc.printHooks(table)
+	for k,hooks in pairs(hooks) do
+		for key, hooks in pairs(hooks) do
+			for k, hooks in ipairs(hooks) do 
+				print("hook: "..tostring(hook.fn) .. " type: " .. hook.type)
+				print("\targs:" .. table.concat({hook.args()}, ', '))
+				print("\tpath:" .. table.concat({hook.args()}, ', '))
+			end
+		end
 	end
 end
 
-function ndoc.addHook(key, type, fn)
-	local path = ndoc.compilePath(key)
-	addHook(ndoc.table, type, fn, store_stack(), path())
-
-	return path
-end
 
 --
 -- SYNCING TABLES
@@ -157,14 +200,17 @@ if SERVER then
 	end
 
 	function ndoc.createTable(parent, key)
-		local path = store_stack(parent.__path(key))
-		local depth = select('#', parent.__path())
+		local path
+		if parent then
+			path = store_stack(parent.__path(key))
+		else
+			path = store_stack(key)
+		end
 
 		local real = {}
 		local proxy = {
 			__key = key,
 			__path = path,
-			__depth = depth, -- the node's depth in the tree
 			__hooks = {}
 		}
 
@@ -191,14 +237,14 @@ if SERVER then
 									oldVal[k] = v
 								end
 							end
-							for k,_ in pairs(_proxyToReal[oldVal]) do
+							for k, _ in pairs(_proxyToReal[oldVal]) do
 								if not v[k] then
 									oldVal[k] = nil
 								end
 							end
 							return 
 						end
-						v = ndoc.createTable(v, path)
+						v = ndoc.createTable(self, path)
 					end
 					if tk == 'string' then
 						-- make sure it's in the string table
@@ -218,9 +264,9 @@ if SERVER then
 					real[k] = v
 
 					-- update the hook structure
-					updateHookStruct(self, k, v)
+					propogateExistingHooks(proxy, k, v)
 					-- call hooks
-					callHooks(self, 'set', k, v)
+					callHook(proxy, 'set', k, v)
 				end
 			})
 
@@ -254,6 +300,7 @@ if SERVER then
 		end -- we don't want to kill the entire onboard just because of this
 
 		for k, v in ndoc.pairs(proxy) do
+
 			if net_BytesWritten() > 32768 then
 				net_WriteUInt(0, 4) -- TYPE_NIL
 				bytes = bytes + 32768
@@ -291,8 +338,6 @@ if SERVER then
 	end)
 
 	ndoc.table = ndoc.createTable() -- table with id: 0
-	hooks[ndoc.table] = {}
-
 elseif CLIENT then
 
 	-- CLIENT
@@ -365,8 +410,6 @@ elseif CLIENT then
 	end
 
 	ndoc.table = ndoc.getTableById(0) -- table from id: 0
-
-
 end
 
 -- TODO: optimize onboarding arrays

@@ -95,8 +95,8 @@ end
 
 
 if SERVER then 
-	ndoc.bigtable.test = 12
-	ndoc.bigtable.helloWorld = {
+	ndoc.table.test = 12
+	ndoc.table.helloWorld = {
 		heyo = 15
 	}
 end
