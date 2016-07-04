@@ -111,7 +111,7 @@ end
 
 local function propogateExistingHooks(tbl, key, val)
 	if not hooks[tbl] or type(val) ~= 'table' then return end
-
+	
 	if hooks[tbl]['?'] then
 		for k, hook in ipairs(hooks[tbl]['?']) do
 			if hook.intermediate then
@@ -202,7 +202,7 @@ if SERVER then
 		return _idToProxy[id]
 	end
 
-	function ndoc.createTable(parent, key)
+	function ndoc.createTable(parent, key, inherits)
 		local path
 		if parent then
 			path = store_stack(parent.__path(key))
@@ -247,7 +247,7 @@ if SERVER then
 							end
 							return 
 						end
-						v = ndoc.createTable(self, path)
+						v = ndoc.createTable(self, path, v)
 					end
 					if tk == 'string' then
 						-- make sure it's in the string table
@@ -273,11 +273,11 @@ if SERVER then
 				end
 			})
 
-		if parent then
-			_originalToProxy[parent] = proxy
+		if inherits then
+			_originalToProxy[inherits] = proxy
 
 			-- TODO: add optimization for adding arrays
-			for k,v in pairs(parent) do
+			for k,v in pairs(inherits) do
 				proxy[k] = v
 			end
 		end
