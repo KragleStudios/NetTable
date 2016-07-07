@@ -23,8 +23,6 @@ local _stringToId = ndoc._stringToId
 --
 -- PATH HOOKING
 --
-local hooks = setmetatable({}, {__mode = 'k'})
-
 local stack_stores = {}
 stack_stores[0] = function() return function(...) return ... end end
 local function store_stack(...)
@@ -56,32 +54,54 @@ function ndoc.compilePath(path)
 	return store_stack(unpack(segments))
 end
 
-local isValidPath = function(table, a, ...)
-	if a == nil then return true end
-	return table[a] ~= nil and ifValidPath(table[a], ...)
+local function makeTablePathValid(tbl, key, ...)
+	if not key then return end
+	if not tbl[key] then tbl[key] = {} end
+	makeTablePathValid(tbl[key], ...)
 end
-ndoc.isValidPath = isValidPath
 
-local hooks = setmetatable({}, {__mode = 'k'})
+-- table for the hooks
+local hooks = setmetatable({}, {
+		__mode = 'k',
+		__index = function(self, key)
+			self[key] = {}
+			return self[key]
+		end
+	})
+
+-- table for fast hook lookup
+local hooks_index = setmetatable({}, {
+		__index = function(self, key)
+			self[key] = setmetatable({}, {__mode = 'k'})
+			return self[key]
+		end
+	})
+
+local kWILDCARD = {}
 
 local function addHook(tbl, hookType, fn, arguments, key, nextKey, ...)
 	if not key then return end 
-
-	if not hooks[tbl] then hooks[tbl] = {} end
 
 	print("adding hook to table " .. tostring(tbl) .. " on key " .. tostring(key) .. "!")
 
 	if key == '?' then
 		-- handle a wild card at this index in the table
-		if not hooks[tbl]['?'] then hooks[tbl]['?'] = {} end
+		if not hooks[tbl][kWILDCARD] then hooks[tbl][kWILDCARD] = {} end
 
-		table.insert(hooks[tbl]['?'], {
-				intermediate = not (not nextKey),
-				fn = fn,
-				args = arguments,
-				type = hookType,
-				path = store_stack(nextKey, ...)
-			})
+		if nextKey then
+			table.insert(hooks[tbl][kWILDCARD], {
+					fn = fn,
+					args = arguments,
+					type = hookType,
+					path = store_stack(nextKey, ...)
+				})
+		else
+			makeTablePathValid(hooks_index, hookType, tbl, kWILDCARD) 
+
+			table.insert(hooks[hookType][tbl][kWILDCARD], function(...)
+				fn(arguments(...))
+			end)
+		end
 
 		for k,v in ndoc.pairs(tbl) do
 			if type(v) == 'table' then
@@ -90,13 +110,20 @@ local function addHook(tbl, hookType, fn, arguments, key, nextKey, ...)
 		end
 	else
 		if not hooks[tbl][key] then hooks[tbl][key] = {} end
-		table.insert(hooks[tbl][key], {
-				intermediate = not (not nextKey),
-				fn = fn,
-				args = arguments,
-				type = hookType,
-				path = store_stack(nextKey, ...)
-			})
+
+		if nextKey then
+			table.insert(hooks[tbl][key], {
+					fn = fn,
+					args = arguments,
+					type = hookType,
+					path = store_stack(nextKey, ...)
+				})
+		else
+			makeTablePathValid(hooks_index, hookType, tbl, key)
+			table.insert(hooks_index[hookType][tbl][key], function(...)
+				fn(arguments(...))
+			end)
+		end
 
 		if type(tbl[key]) == 'table' then -- finish going through and adding the hooks!
 			addHook(tbl[key], hookType, fn, arguments, nextKey, ...)
@@ -131,38 +158,20 @@ local function propogateExistingHooks(tbl, key, val)
 end
 
 local function callHook(tbl, type, key, val)
-	if not hooks[tbl] then return end
-	print("the hook table exists!")
-	
-	if hooks[tbl][key] then
-		for k, hook in ipairs(hooks[tbl][key]) do
-			if hook.type == type and not hook.intermediate then
-				hook.fn(hook.args(val))
-			end
+	local hooks_table = hooks_index[type][tbl]
+	if not hooks_table then return end
+
+	if hooks_table[key] then
+		for k, hook in ipairs(hook_table[key]) do
+			hook(val)
 		end
 	end
-	if hooks[tbl]['?'] then
-		for k, hook in ipairs(hooks[tbl]['?']) do
-			if hook.type == type and not hook.intermediate then
-				hook.fn(hook.args(val))
-			end
+	if hooks_table[kWILDCARD] then
+		for k, hook in ipairs(hook_Table[kWILDCARD]) do
+			hook(key, val)
 		end
 	end
 end
-
-
-function ndoc.printHooks(table)
-	for k,hooks in pairs(hooks) do
-		for key, hooks in pairs(hooks) do
-			for k, hook in ipairs(hooks) do 
-				print("hook: "..tostring(hook.fn) .. " type: " .. hook.type)
-				print("\targs:" .. table.concat({hook.args()}, ', '))
-				print("\tpath:" .. table.concat({hook.args()}, ', '))
-			end
-		end
-	end
-end
-
 
 --
 -- SYNCING TABLES
@@ -347,6 +356,7 @@ elseif CLIENT then
 	local _idToProxy = setmetatable({}, {_mode = 'v'})
 	local _proxyToId = setmetatable({}, {_mode = 'k'})
 	local _proxyToReal = setmetatable({}, {_mode = 'k'})
+	local tableStaging = {} -- stage a table while we request a partial sync
 
 	function ndoc.getTableById(id)
 		local proxy = _idToProxy[id]
@@ -385,7 +395,6 @@ elseif CLIENT then
 		--ndoc.print(tostring(tid) .. ' : ' .. tostring(k) .. ' = ' .. tostring(v))
 		local real = _proxyToReal[_tableWithId(tid)]
 		if not real then
-			ndoc.error("failed to get 'real' for table " .. tid .. " during sync.")
 			return 
 		end
 		real[k] = v
