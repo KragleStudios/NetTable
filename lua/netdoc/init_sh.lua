@@ -43,6 +43,7 @@ ndoc.print("loading ndoc by thelastpenguin")
 -- INPUT RESTRICTIONS
 -- ----------------------------------------
 ndoc._allowedKeyTypes = {
+	['nil'] = false,
 	['table'] = false,
 	['string'] = true,
 	['Entity'] = true,
@@ -53,6 +54,7 @@ ndoc._allowedKeyTypes = {
 }
 
 ndoc._allowedValueTypes = {
+	['nil'] = true,
 	['table'] = true,
 	['string'] = true,
 	['Entity'] = true,

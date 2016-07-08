@@ -48,127 +48,137 @@ local function store_stack(...)
 end
 ndoc.store_stack = store_stack
 
+local function stack_dropfirst(a, ...)
+	return ...
+end
+local function stack_onlyone(a)
+	return a 
+end
+
+local kWILDCARD = {}
+local table_to_inter_hooks = setmetatable({}, {__mode = 'k'})
+local table_to_call_hooks = setmetatable({}, {__mode = 'k'})
+
+local function nextHookObj(hookObj, wildKey)
+	if wildKey then
+		return stack_onlyone(hookObj.keyStack()), {
+			pathStr = hookObj.pathStr,
+			fn = hookObj.fn,
+			keyStack = store_stack(stack_dropfirst(hookObj.keyStack())),
+			argStack = store_stack(hookObj.argStack(wildKey)),
+			type = hookObj.type
+		}
+	else 
+		return stack_onlyone(hookObj.keyStack()), {
+			pathStr = hookObj.pathStr,
+			fn = hookObj.fn,
+			keyStack = store_stack(stack_dropfirst(hookObj.keyStack())),
+			argStack = hookObj.argStack,
+			type = hookObj.type
+		}
+	end
+end
+
+local function makeTablePathValid(table, key, ...)
+	if key == nil then return end
+	if not table[key] then table[key] = {} end
+	makeTablePathValid(table[key], ...)
+end
+
+local function isTablePathValid(table, key, ...)
+	if key == nil then return true end
+	return table[key] and isTablePathValid(table, ...) or false
+end
+
+
+local function addHook(toTable, onKey, hookObj)
+	print('onPath: ' .. hookObj.pathStr .. 'toTable: ', toTable, 'onKey: ', onKey, ' keyStack: ', hookObj.keyStack())
+	if select("#", hookObj.keyStack()) == 0 then -- its done so just add it to the call hooks list for this table node
+		print('reached empty stack! no more keys, this is a leaf!')
+		-- it gets added to table_to_call_hooks
+		makeTablePathValid(table_to_call_hooks, hookObj.type, toTable, onKey)
+
+		local fn = hookObj.fn
+		local argStack = hookObj.argStack
+		table.insert(table_to_call_hooks[hookObj.type][toTable][onKey], function(...)
+			fn(argStack(...))
+		end)
+	else
+		-- it gets added to the table_inter_hooks instead :o
+		makeTablePathValid(table_to_inter_hooks, toTable, onKey)
+		table.insert(table_to_inter_hooks[toTable][onKey], hookObj)
+
+		if onKey == kWILDCARD then
+			for k,v in ndoc.pairs(toTable) do
+				if type(v) == 'table' then
+					addHook(v, nextHookObj(hookObj, k))
+				end
+			end
+		elseif type(toTable[onKey]) == 'table' then
+			addHook(toTable[onKey], nextHookObj(hookObj))
+		end
+	end
+end
+
+local function propogateHooksFromParentToChild(parent, key, child)
+	if not table_to_inter_hooks[parent] then return end
+	print("propogateHooksFromParentToChild(" .. tostring(parent) .. ", " .. tostring(key) .. ", " .. tostring(child) .. ")")
+
+	local function addHookHelper(hook, onKey)
+		addHook(
+				child,
+				nextHookObj(hook)
+			)
+	end	
+
+	if table_to_inter_hooks[parent][key] then
+		for k, hook in ipairs(table_to_inter_hooks[parent][kWILDCARD]) do
+			addHookHelper(hook)
+		end
+	end
+
+	if table_to_inter_hooks[parent][kWILDCARD] then
+		for k, hook in ipairs(table_to_inter_hooks[parent][kWILDCARD]) do
+			addHookHelper(hook, key)
+		end
+	end
+
+end
 
 function ndoc.compilePath(path)
 	local segments = string.Explode('.', path, false)
+
+	for k,v in ipairs(segments) do
+		if v == '?' then segments[k] = kWILDCARD end
+	end
+
 	return store_stack(unpack(segments))
 end
 
-local function makeTablePathValid(tbl, key, ...)
-	if not key then return end
-	if not tbl[key] then tbl[key] = {} end
-	makeTablePathValid(tbl[key], ...)
+function ndoc.addHook(path, type, fn)
+	print("ndoc.addHook(" .. tostring(path)..", " .. tostring(type) .. ", " ..tostring(fn) .. ")")
+	local cpath = ndoc.compilePath(path)
+	addHook(ndoc.table, stack_onlyone(cpath()), {
+			pathStr = path,
+			type = type,
+			keyStack = store_stack(stack_dropfirst(cpath())),
+			argStack = function() end,
+			fn = fn
+		})
 end
 
--- table for the hooks
-local hooks = setmetatable({}, {
-		__mode = 'k',
-		__index = function(self, key)
-			self[key] = {}
-			return self[key]
-		end
-	})
-
--- table for fast hook lookup
-local hooks_index = setmetatable({}, {
-		__index = function(self, key)
-			self[key] = setmetatable({}, {__mode = 'k'})
-			return self[key]
-		end
-	})
-
-local kWILDCARD = {}
-
-local function addHook(tbl, hookType, fn, arguments, key, nextKey, ...)
-	if not key then return end 
-
-	print("adding hook to table " .. tostring(tbl) .. " on key " .. tostring(key) .. "!")
-
-	if key == '?' then
-		-- handle a wild card at this index in the table
-		if not hooks[tbl][kWILDCARD] then hooks[tbl][kWILDCARD] = {} end
-
-		if nextKey then
-			table.insert(hooks[tbl][kWILDCARD], {
-					fn = fn,
-					args = arguments,
-					type = hookType,
-					path = store_stack(nextKey, ...)
-				})
-		else
-			makeTablePathValid(hooks_index, hookType, tbl, kWILDCARD) 
-
-			table.insert(hooks[hookType][tbl][kWILDCARD], function(...)
-				fn(arguments(...))
-			end)
-		end
-
-		for k,v in ndoc.pairs(tbl) do
-			if type(v) == 'table' then
-				addHook(v, hookType, fn, store_stack(arguments(k)), nextKey, ...)
+local function callHook(proxy, type, key, value)
+	if isTablePathValid(table_to_call_hooks, type, proxy) then
+		local hookIndex = table_to_call_hooks[type][proxy][key]
+		if hookIndex[key] then
+			for k,v in ipairs(hookIndex[key]) do
+				v(value)
 			end
 		end
-	else
-		if not hooks[tbl][key] then hooks[tbl][key] = {} end
-
-		if nextKey then
-			table.insert(hooks[tbl][key], {
-					fn = fn,
-					args = arguments,
-					type = hookType,
-					path = store_stack(nextKey, ...)
-				})
-		else
-			makeTablePathValid(hooks_index, hookType, tbl, key)
-			table.insert(hooks_index[hookType][tbl][key], function(...)
-				fn(arguments(...))
-			end)
-		end
-
-		if type(tbl[key]) == 'table' then -- finish going through and adding the hooks!
-			addHook(tbl[key], hookType, fn, arguments, nextKey, ...)
-		end
-	end
-end
-
-function ndoc.addHook(_path, type, fn)
-	local path = ndoc.compilePath(_path)
-	addHook(ndoc.table, type, fn, store_stack(), path())
-end
-
-local function propogateExistingHooks(tbl, key, val)
-	if not hooks[tbl] or type(val) ~= 'table' then return end
-	
-	if hooks[tbl]['?'] then
-		for k, hook in ipairs(hooks[tbl]['?']) do
-			if hook.intermediate then
-				addHook(tbl[key], hook.type, hook.fn, store_stack(hook.args(key)), hook.path())
+		if hookIndex[kWILDCARD] then
+			for k,v in ipairs(hookIndex[kWILDCARD]) do
+				v(value)
 			end
-		end
-	end
-
-	if hooks[tbl][key] then
-		for k, hook in ipairs(hooks[tbl][key]) do
-			if hook.intermediate then
-				addHook(tbl[key], hook.type, hook.fn, hook.args, hook.path())
-			end
-		end
-	end
-
-end
-
-local function callHook(tbl, type, key, val)
-	local hooks_table = hooks_index[type][tbl]
-	if not hooks_table then return end
-
-	if hooks_table[key] then
-		for k, hook in ipairs(hook_table[key]) do
-			hook(val)
-		end
-	end
-	if hooks_table[kWILDCARD] then
-		for k, hook in ipairs(hook_Table[kWILDCARD]) do
-			hook(key, val)
 		end
 	end
 end
@@ -276,7 +286,9 @@ if SERVER then
 					real[k] = v
 
 					-- update the hook structure
-					propogateExistingHooks(proxy, k, v)
+					if type(v) == 'table' then
+						propogateHooksFromParentToChild(proxy, k, v)
+					end
 					-- call hooks
 					callHook(proxy, 'set', k, v)
 				end
