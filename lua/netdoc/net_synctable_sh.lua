@@ -76,9 +76,9 @@ local function makeTablePathValid(table, key, ...)
 end
 
 local function addHook(toTable, onKey, hookObj)
-	print('onPath: ' .. hookObj.pathStr .. 'toTable: ', toTable, 'onKey: ', onKey, ' keyStack: ', hookObj.keyStack())
+	-- print('onPath: ' .. hookObj.pathStr .. 'toTable: ', toTable, 'onKey: ', onKey, ' keyStack: ', hookObj.keyStack())
 	if select("#", hookObj.keyStack()) == 0 then -- its done so just add it to the call hooks list for this table node
-		print('reached empty stack! no more keys, this is a leaf!')
+		-- print('reached empty stack! no more keys, this is a leaf!')
 		-- it gets added to table_to_call_hooks
 		makeTablePathValid(table_to_call_hooks, hookObj.type, toTable, onKey)
 
@@ -106,7 +106,7 @@ end
 
 local function propogateHooksFromParentToChild(parent, key, child)
 	if not table_to_inter_hooks[parent] then return end
-	print("propogateHooksFromParentToChild(" .. tostring(parent) .. ", " .. tostring(key) .. ", " .. tostring(child) .. ")")
+	-- print("propogateHooksFromParentToChild(" .. tostring(parent) .. ", " .. tostring(key) .. ", " .. tostring(child) .. ")")
 
 	local function addHookHelper(hook, onKey)
 		addHook(
@@ -140,7 +140,7 @@ function ndoc.compilePath(path)
 end
 
 function ndoc.addHook(path, type, fn)
-	print("ndoc.addHook(" .. tostring(path)..", " .. tostring(type) .. ", " ..tostring(fn) .. ")")
+	-- print("ndoc.addHook(" .. tostring(path)..", " .. tostring(type) .. ", " ..tostring(fn) .. ")")
 	local cpath = ndoc.compilePath(path)
 	addHook(ndoc.table, stack_onlyone(cpath()), {
 			pathStr = path,
@@ -152,8 +152,7 @@ function ndoc.addHook(path, type, fn)
 end
 
 local function callHook(proxy, type, key, value)
-	print("callHook(" .. tostring(proxy) .. ", " .. tostring(type) .. ", " .. tostring(key) .. ", " .. tostring(value) .. ")")
-	PrintTable(table_to_call_hooks)
+	-- print("callHook(" .. tostring(proxy) .. ", " .. tostring(type) .. ", " .. tostring(key) .. ", " .. tostring(value) .. ")")
 	if table_to_call_hooks[type] and table_to_call_hooks[type][proxy] then
 		local hookIndex = table_to_call_hooks[type][proxy]
 		if hookIndex[key] then
