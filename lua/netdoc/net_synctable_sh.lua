@@ -60,36 +60,20 @@ local table_to_inter_hooks = setmetatable({}, {__mode = 'k'})
 local table_to_call_hooks = setmetatable({}, {__mode = 'k'})
 
 local function nextHookObj(hookObj, wildKey)
-	if wildKey then
-		return stack_onlyone(hookObj.keyStack()), {
-			pathStr = hookObj.pathStr,
-			fn = hookObj.fn,
-			keyStack = store_stack(stack_dropfirst(hookObj.keyStack())),
-			argStack = store_stack(hookObj.argStack(wildKey)),
-			type = hookObj.type
-		}
-	else 
-		return stack_onlyone(hookObj.keyStack()), {
-			pathStr = hookObj.pathStr,
-			fn = hookObj.fn,
-			keyStack = store_stack(stack_dropfirst(hookObj.keyStack())),
-			argStack = hookObj.argStack,
-			type = hookObj.type
-		}
-	end
+	return stack_onlyone(hookObj.keyStack()), {
+		pathStr = hookObj.pathStr,
+		fn = hookObj.fn,
+		keyStack = store_stack(stack_dropfirst(hookObj.keyStack())),
+		argStack = wildKey ~= nil and store_stack(hookObj.argStack(wildKey)) or hookObj.argStack,
+		type = hookObj.type
+	}
 end
 
 local function makeTablePathValid(table, key, ...)
 	if key == nil then return end
-	if not table[key] then table[key] = {} end
+	if not table[key] then table[key] = {} end 
 	makeTablePathValid(table[key], ...)
 end
-
-local function isTablePathValid(table, key, ...)
-	if key == nil then return true end
-	return table[key] and isTablePathValid(table, ...) or false
-end
-
 
 local function addHook(toTable, onKey, hookObj)
 	print('onPath: ' .. hookObj.pathStr .. 'toTable: ', toTable, 'onKey: ', onKey, ' keyStack: ', hookObj.keyStack())
@@ -127,7 +111,7 @@ local function propogateHooksFromParentToChild(parent, key, child)
 	local function addHookHelper(hook, onKey)
 		addHook(
 				child,
-				nextHookObj(hook)
+				nextHookObj(hook, onKey)
 			)
 	end	
 
@@ -162,14 +146,16 @@ function ndoc.addHook(path, type, fn)
 			pathStr = path,
 			type = type,
 			keyStack = store_stack(stack_dropfirst(cpath())),
-			argStack = function() end,
+			argStack = function(...) return ... end,
 			fn = fn
 		})
 end
 
 local function callHook(proxy, type, key, value)
-	if isTablePathValid(table_to_call_hooks, type, proxy) then
-		local hookIndex = table_to_call_hooks[type][proxy][key]
+	print("callHook(" .. tostring(proxy) .. ", " .. tostring(type) .. ", " .. tostring(key) .. ", " .. tostring(value) .. ")")
+	PrintTable(table_to_call_hooks)
+	if table_to_call_hooks[type] and table_to_call_hooks[type][proxy] then
+		local hookIndex = table_to_call_hooks[type][proxy]
 		if hookIndex[key] then
 			for k,v in ipairs(hookIndex[key]) do
 				v(value)
@@ -177,7 +163,7 @@ local function callHook(proxy, type, key, value)
 		end
 		if hookIndex[kWILDCARD] then
 			for k,v in ipairs(hookIndex[kWILDCARD]) do
-				v(value)
+				v(key, value)
 			end
 		end
 	end
