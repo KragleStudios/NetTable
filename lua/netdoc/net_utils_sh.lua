@@ -3,7 +3,6 @@ ndoc._utils_loaded = true
 
 if SERVER then AddCSLuaFile() end
 
-
 -- table of all players
 local all_players = player.GetAll()
 ndoc.all_players = all_players
@@ -19,7 +18,7 @@ hook.Add('PlayerDisconnected', 'ndoc.update_all_players', _updateAllPlayers)
 if CLIENT then
 	ndoc._waitForLocalPlayerValidity = function(callback)
 		if not IsValid(LocalPlayer()) then
-			return timer.Simple(1, function()
+			return timer.Simple(0.1, function()
 				ndoc._waitForLocalPlayerValidity(callback)
 			end)
 		end

@@ -116,7 +116,7 @@ local function propogateHooksFromParentToChild(parent, key, child)
 	end	
 
 	if table_to_inter_hooks[parent][key] then
-		for k, hook in ipairs(table_to_inter_hooks[parent][kWILDCARD]) do
+		for k, hook in ipairs(table_to_inter_hooks[parent][key]) do
 			addHookHelper(hook)
 		end
 	end
@@ -126,7 +126,6 @@ local function propogateHooksFromParentToChild(parent, key, child)
 			addHookHelper(hook, key)
 		end
 	end
-
 end
 
 function ndoc.compilePath(path)
@@ -139,12 +138,23 @@ function ndoc.compilePath(path)
 	return store_stack(unpack(segments))
 end
 
-function ndoc.addHook(path, type, fn)
+function ndoc.path(...)
+	return store_stack(...)
+end
+
+function ndoc.addHook(path, _type, fn)
 	-- print("ndoc.addHook(" .. tostring(path)..", " .. tostring(type) .. ", " ..tostring(fn) .. ")")
-	local cpath = ndoc.compilePath(path)
+	local cpath
+	if type(path) == 'function' then
+		cpath = path
+	elseif type(path) == 'string' then
+		cpath = ndoc.compilePath(path)
+	else 
+		error("unsupported path type " .. tostring(path))
+	end
 	addHook(ndoc.table, stack_onlyone(cpath()), {
 			pathStr = path,
-			type = type,
+			type = _type,
 			keyStack = store_stack(stack_dropfirst(cpath())),
 			argStack = function(...) return ... end,
 			fn = fn
@@ -238,17 +248,18 @@ if SERVER then
 						-- ndoc.print("setting table as value: " .. tostring(v))
 						if type(real[k]) == 'table' then
 							-- simply update the table rather than reassign it
-							local oldVal = real[k]
+							local oldVal = real[k] -- real[k] returns a nonreal proxy
 							for k, v in pairs(v) do
 								if oldVal[k] ~= v then
 									oldVal[k] = v
 								end
 							end
 							for k, _ in pairs(_proxyToReal[oldVal]) do
-								if not v[k] then
+								if v[k] == nil then
 									oldVal[k] = nil
 								end
 							end
+							callHook(proxy, 'set', k, oldVal)
 							return 
 						end
 						v = ndoc.createTable(self, path, v)
@@ -390,11 +401,18 @@ elseif CLIENT then
 		local v = net_readValue()
 
 		--ndoc.print(tostring(tid) .. ' : ' .. tostring(k) .. ' = ' .. tostring(v))
-		local real = _proxyToReal[_tableWithId(tid)]
+		local t = _tableWithId(tid)
+		local real = _proxyToReal[t]
 		if not real then
 			return 
 		end
 		real[k] = v
+
+		-- propogate hook structure and call hooks
+		if type(v) == 'table' then
+			propogateHooksFromParentToChild(t, k, v)
+		end
+		callHook(t, 'set', k, v)
 	end)
 
 	net.Receive('ndoc.t.sync', function()
@@ -402,13 +420,19 @@ elseif CLIENT then
 		local t = _tableWithId(tid)
 		local real = _proxyToReal[t]
 
-		print("syncing table " .. tid)
-
 		while true do
 			local k = net_readKey()
 			if k == nil then break end
 			local v = net_readValue()
 			real[k] = v
+
+			-- update the hook structure
+			if type(v) == 'table' then
+				propogateHooksFromParentToChild(t, k, v)
+			end
+
+			-- call any hooks that might be triggered by this
+			callHook(t, 'set', k, v)
 		end
 	end)
 
