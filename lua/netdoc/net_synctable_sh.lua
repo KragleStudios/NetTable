@@ -399,6 +399,7 @@ elseif CLIENT then
 		local tid = net_ReadUInt(12)
 		local k = net_readKey()
 		local v = net_readValue()
+		if k == nil then return end
 
 		--ndoc.print(tostring(tid) .. ' : ' .. tostring(k) .. ' = ' .. tostring(v))
 		local t = _tableWithId(tid)
