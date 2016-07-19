@@ -33,8 +33,9 @@ to a hook but it's not super signifigant. That being said minimizing assignments
 
 ## Network Visibility
 ```
-ndoc.hook('yourmod.players.$.*', 'sync', function(playerTo, key)
+ndoc.hook('yourmod.players.?', 'sync', function(playerTo, key)
   return player == key
 end)
 ```
 using the 'sync' hook you can control who gets to see which parts of the bigtable. This as you can imagine is VERY powerful.
+THIS IS NOT YET IMPLEMENTED.
