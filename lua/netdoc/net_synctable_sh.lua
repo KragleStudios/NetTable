@@ -56,6 +56,7 @@ local function stack_onlyone(a)
 end
 
 local kWILDCARD = {}
+ndoc.kWILDCARD = kWILDCARD
 local table_to_inter_hooks = setmetatable({}, {__mode = 'k'})
 local table_to_call_hooks = setmetatable({}, {__mode = 'k'})
 
@@ -167,12 +168,12 @@ local function callHook(proxy, type, key, value)
 		local hookIndex = table_to_call_hooks[type][proxy]
 		if hookIndex[key] then
 			for k,v in ipairs(hookIndex[key]) do
-				v(value)
+				v(value, proxy)
 			end
 		end
 		if hookIndex[kWILDCARD] then
 			for k,v in ipairs(hookIndex[kWILDCARD]) do
-				v(key, value)
+				v(key, value, proxy)
 			end
 		end
 	end
@@ -220,15 +221,16 @@ if SERVER then
 		local path
 		if parent then
 			path = store_stack(parent.__path(key))
-		else
+		elseif key ~= nil then
 			path = store_stack(key)
+		else
+			path = store_stack()
 		end
 
 		local real = {}
 		local proxy = {
 			__key = key,
 			__path = path,
-			__hooks = {}
 		}
 
 		local tid = nextUid()
@@ -262,7 +264,7 @@ if SERVER then
 							callHook(proxy, 'set', k, oldVal)
 							return 
 						end
-						v = ndoc.createTable(self, path, v)
+						v = ndoc.createTable(self, k, v)
 					end
 					if tk == 'string' then
 						-- make sure it's in the string table
