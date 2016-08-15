@@ -12,7 +12,7 @@ require 'ra'
 local kvo, ds = ra.kvo, ra.ds
 
 ndoc.kWILDCARD = kvo.kWILDCARD
-ndoc.compilePath = kvo.compile_path
+ndoc.compilePath = kvo.compilePath
 
 -- DEFINE LOCALS
 local ndoc_writeKey
