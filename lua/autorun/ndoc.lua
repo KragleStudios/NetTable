@@ -295,3 +295,17 @@ concommand.Add('ndoc_PrintTable'..(SERVER and '_sv' or '_cl'), function(pl)
 	print("\nndoc.entities:")
 	ndoc.PrintTable(ndoc.ents)
 end)
+
+concommand.Add('ndoc_debug' .. (SERVER and '_sv' or '_cl'), function(pl)
+	if SERVER and IsValid(pl) and not pl:IsListenServerHost() then return end
+
+	local function observeHelper(table, path)
+		ndoc.observe(table, '_print_paths', function(key, value)
+			if type(value) == 'table' then
+				observeHelper(value, tostring(path) .. '.' .. tostring(key))
+			end
+			print(path..'.' .. tostring(key) .. ' = ' .. tostring(value))
+		end, ndoc.kWILDCARD)
+	end
+	observeHelper(ndoc.table, '')
+end)
